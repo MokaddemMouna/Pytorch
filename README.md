@@ -1,4 +1,4 @@
-# Pytorch-Tutorials
+# Pytorch
 Implementation of some popular models in Pytorch.
 
 This is a project that follows my path along learning Pytorch library through following some tutorials and implementing some DL popular models. 
