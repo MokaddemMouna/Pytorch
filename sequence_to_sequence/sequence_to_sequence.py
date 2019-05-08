@@ -200,6 +200,7 @@ class DecoderRNN(nn.Module):
 teacher_forcing_ratio = 0.5        
     
     
+
 def train(n_epochs,n_iters,pairs,hidden_size,learning_rate):
     
     
@@ -209,10 +210,7 @@ def train(n_epochs,n_iters,pairs,hidden_size,learning_rate):
     loss_function = nn.NLLLoss()
     encoder_optimizer = optim.SGD(encoder.parameters(), lr=learning_rate)
     decoder_optimizer = optim.SGD(decoder.parameters(), lr=learning_rate)
-    encoder_optimizer.zero_grad()
-    decoder_optimizer.zero_grad()
     
-    loss = 0
     accumulated_loss = 0
     losses = []
     
@@ -221,9 +219,15 @@ def train(n_epochs,n_iters,pairs,hidden_size,learning_rate):
     for i in range(n_epochs):
         training_pairs = [tensors_from_pair(random.choice(pairs)) for _ in range(n_iters)]
         for pair in training_pairs:
+            
+            loss = 0
+            
+            encoder_optimizer.zero_grad()
+            decoder_optimizer.zero_grad()
+            
             input_tensor = pair[0]
             target_tensor = pair[1]
-            target_length = target_tensor.shape[1]
+            target_length = target_tensor.shape[0]
             
             encoder_output,encoder_hidden = encoder(input_tensor)
             
@@ -255,7 +259,6 @@ def train(n_epochs,n_iters,pairs,hidden_size,learning_rate):
         
         losses.append(accumulated_loss)
         print('epoch {}: {}'.format(i,accumulated_loss))
-    
             
     
 
