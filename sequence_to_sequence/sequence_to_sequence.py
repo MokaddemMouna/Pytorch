@@ -217,6 +217,7 @@ def train(n_epochs,n_iters,pairs,hidden_size,learning_rate):
     
     
     for i in range(n_epochs):
+        accumulated_loss = 0
         training_pairs = [tensors_from_pair(random.choice(pairs)) for _ in range(n_iters)]
         for pair in training_pairs:
             
@@ -257,8 +258,9 @@ def train(n_epochs,n_iters,pairs,hidden_size,learning_rate):
             decoder_optimizer.step()
             accumulated_loss += loss.item()/target_length
         
-        losses.append(accumulated_loss)
-        print('epoch {}: {}'.format(i,accumulated_loss))
+        avg_loss_over_examples = accumulated_loss/len(training_pairs)
+        losses.append(avg_loss_over_examples)
+        print('epoch {}: {}'.format(i,avg_loss_over_examples))
             
     
 
