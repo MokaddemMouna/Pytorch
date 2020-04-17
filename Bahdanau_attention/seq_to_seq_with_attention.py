@@ -48,7 +48,7 @@ class EncoderDecoder(nn.Module):
                             src_mask, trg_mask, hidden=decoder_hidden)
 
 class Generator(nn.Module):
-    """Define standard linear + softmax generation step."""
+    """Define standard linear + softmax generation step. This is to use for later in the deooder"""
     def __init__(self, hidden_size, vocab_size):
         super(Generator, self).__init__()
         self.proj = nn.Linear(hidden_size, vocab_size, bias=False)
@@ -74,12 +74,15 @@ class Encoder(nn.Module):
         """
         packed = pack_padded_sequence(x, lengths, batch_first=True)
         output, final = self.rnn(packed)
+        # after unpacking, output will be dimension of (64,seq_length,512), 64 batch_size and 512 because hidden
+        # layer is of size 256 but since we have bidirectional, for each time step there are 2 hidden layers that are concatenated
+        # giving a length of 256+256 = 512
         output, _ = pad_packed_sequence(output, batch_first=True)
 
         # we need to manually concatenate the final states for both directions
-        fwd_final = final[0:final.size(0):2]
-        bwd_final = final[1:final.size(0):2]
-        final = torch.cat([fwd_final, bwd_final], dim=2)  # [num_layers, batch, 2*dim]
+        fwd_final = final[0:final.size(0):2] # this is to ask for the final state of the forward pass with dim (1,64,256)
+        bwd_final = final[1:final.size(0):2] # same but for the backward pass
+        final = torch.cat([fwd_final, bwd_final], dim=2)  # [num_layers, batch, 2*dim] (1,64,512)
 
         return output, final
 
@@ -96,7 +99,7 @@ class Decoder(nn.Module):
         self.attention = attention
         self.dropout = dropout
 
-        # emb_size for teacher forcing + 1 hidden_size for decoder last hidden layer + 1 hidden_size for context vector
+        # this is the input for si which is yi-1(emb_size) and context vector ci (2*hidden_size)
         self.rnn = nn.GRU(emb_size + 2 * hidden_size, hidden_size, num_layers,
                           batch_first=True, dropout=dropout)
 
@@ -104,6 +107,8 @@ class Decoder(nn.Module):
         self.bridge = nn.Linear(2 * hidden_size, hidden_size, bias=True) if bridge else None
 
         self.dropout_layer = nn.Dropout(p=dropout)
+        # the input to last linear layer with which we calculate the loss is si, ci and yi-1, in the paper
+        # it is only si (and implicitly ci that contributed to the calculation of si) but here the author has made a choice explained below
         self.pre_output_layer = nn.Linear(hidden_size + 2 * hidden_size + emb_size,
                                           hidden_size, bias=False)
 
@@ -111,6 +116,7 @@ class Decoder(nn.Module):
         """Perform a single decoder step (1 word)"""
 
         # compute context vector using attention mechanism
+        # remember query is si and key is hj
         query = hidden[-1].unsqueeze(1)  # [#layers, B, D] -> [B, 1, D]
         context, attn_probs = self.attention(
             query=query, proj_key=proj_key,
@@ -141,16 +147,19 @@ class Decoder(nn.Module):
             hidden = self.init_hidden(encoder_final)
 
         # pre-compute projected encoder hidden states
-        # (the "keys" for the attention mechanism)
+        # (the "keys" for the attention mechanism), i.e., apply an mpl on all hj
         # this is only done for efficiency
         proj_key = self.attention.key_layer(encoder_hidden)
 
         # here we store all intermediate hidden states and pre-output vectors
-        decoder_states = []
-        pre_output_vectors = []
+        decoder_states = [] # si
+        pre_output_vectors = [] # list of the states which are the concat(si,ci,yi-1) and which will be used to calculate the loss
 
         # unroll the decoder RNN for max_len steps
         for i in range(max_len):
+            # retrive yi and next we will calculate si+1 by calculating the context vector
+            # note that we have s0 stored in hidden which was initialized by an mlp applied
+            # on the concatenation of encoder forward and backward last hidden layers
             prev_embed = trg_embed[:, i].unsqueeze(1)
             output, hidden, pre_output = self.forward_step(
                 prev_embed, encoder_hidden, src_mask, proj_key, hidden)
@@ -159,6 +168,7 @@ class Decoder(nn.Module):
 
         decoder_states = torch.cat(decoder_states, dim=1)
         pre_output_vectors = torch.cat(pre_output_vectors, dim=1)
+        # hidden is the last hidden layer of the decoder, if seq_length is L then it will be sL
         return decoder_states, hidden, pre_output_vectors  # [B, N, D]
 
     def init_hidden(self, encoder_final):
@@ -196,18 +206,24 @@ class BahdanauAttention(nn.Module):
         query = self.query_layer(query)
 
         # Calculate scores.
+        # U * tanh(V * si+ W * hj) of dim (64,1,seq_length)
         scores = self.energy_layer(torch.tanh(query + proj_key))
         scores = scores.squeeze(2).unsqueeze(1)
 
         # Mask out invalid positions.
         # The mask marks valid positions so we invert it using `mask & 0`.
+        # this has nothing to do with the mask defined above, here we attribute to score values of zeroes to -inf
+        # because we want their contributions to be very low since they don't contribute at all to the
+        # decoder's word we want to predict
         scores.data.masked_fill_(mask == 0, -float('inf'))
 
         # Turn scores to probabilities.
         alphas = F.softmax(scores, dim=-1)
         self.alphas = alphas
 
-        # The context vector is the weighted sum of the values.
+        # The context vector is the weighted sum of the values. i.e., sum(alphas * hjs)
+        # bmm performs a batch matrix-matrix product of matrices stored in alphas and value since
+        # alphas dim = (64,1,seq_length) and value dim = (64,seq_length,512) -> context (64,1,512)
         context = torch.bmm(alphas, value)
 
         # context shape: [B, 1, 2D], alphas shape: [B, 1, M]
@@ -240,6 +256,7 @@ class Batch:
         # the tokenization adds for each sample of src 3,2, at the end of the sample, which corresponds to the tokens </s> and <s>
         self.src = src
         self.src_lengths = src_lengths
+        # unsequeeze returns a new tensor with a dimension of size one inserted at the specified position
         self.src_mask = (src != pad_index).unsqueeze(-2)
         self.nseqs = src.size(0)
 
@@ -253,8 +270,15 @@ class Batch:
             trg, trg_lengths = trg
 
             # the tokenization adds 2 at the start of the sentence and 3 at the end of the sentence
+            # removes end of sentence token whose index is 3 because trg is going to be used in training
+            # for calculating the context vector so we dont need the end of sentence token but we keep the 2 which is
+            # the start of sentence which is our initial state s0
             self.trg = trg[:, :-1]
             self.trg_lengths = trg_lengths
+            # removes start of sentence token whose index is 2
+            # this is done because the trg_y will be used in training in calculating the loss, so we dont need the
+            # token start of sentence but rather the real tokens. End of sentence which is 3 is kept because the
+            # end of sentence will be generated when unrolling the rnn to predict words
             self.trg_y = trg[:, 1:]
             self.trg_mask = (self.trg_y != pad_index)
             self.ntokens = (self.trg_y != pad_index).data.sum().item()
@@ -279,6 +303,8 @@ def run_epoch(data_iter, model, loss_compute, print_every=50):
 
     for i, batch in enumerate(data_iter, 1):
 
+        # src is the one with 3,2 tokens (</s>,<s>) at the end and trg is the one with 2 at the beginning and without 3 at the end
+        # lengths are accordingly
         out, _, pre_output = model.forward(batch.src, batch.trg,
                                            batch.src_mask, batch.trg_mask,
                                            batch.src_lengths, batch.trg_lengths)
@@ -452,6 +478,7 @@ class SimpleLossCompute:
         self.opt = opt
 
     def __call__(self, x, y, norm):
+        # norm is the number of samples per batch, here it is 64
         x = self.generator(x)
         loss = self.criterion(x.contiguous().view(-1, x.size(-1)),
                               y.contiguous().view(-1))
@@ -479,6 +506,8 @@ def train(model, num_epochs=10, lr=0.0003, print_every=100):
 
     for epoch in range(num_epochs):
         print("Epoch", epoch)
+        # By default all the modules are initialized to train mode (self.training = True).
+        # Also be aware that some layers have different behavior during train/and evaluation (like BatchNorm, Dropout) so setting it matters.
         model.train()
         train_perplexity = run_epoch((rebatch(PAD_INDEX, b) for b in train_iter),
                                      model,
@@ -503,3 +532,5 @@ model = make_model(len(SRC.vocab), len(TRG.vocab),
                    emb_size=256, hidden_size=256,
                    num_layers=1, dropout=0.2)
 dev_perplexities = train(model, print_every=100)
+
+
