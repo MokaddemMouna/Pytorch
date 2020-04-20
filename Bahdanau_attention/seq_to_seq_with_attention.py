@@ -212,9 +212,8 @@ class BahdanauAttention(nn.Module):
 
         # Mask out invalid positions.
         # The mask marks valid positions so we invert it using `mask & 0`.
-        # this has nothing to do with the mask defined above, here we attribute to score values of zeroes to -inf
-        # because we want their contributions to be very low since they don't contribute at all to the
-        # decoder's word we want to predict
+        # this will mask out the padding indices so the score of attention for padding indices will be -inf in order
+        # to not bias the calculation of the context vector
         scores.data.masked_fill_(mask == 0, -float('inf'))
 
         # Turn scores to probabilities.
@@ -253,7 +252,7 @@ class Batch:
 
         src, src_lengths = src
 
-        # the tokenization adds for each sample of src 3,2, at the end of the sample, which corresponds to the tokens </s> and <s>
+        # the tokenization adds for each sample of src 3,2, at the end of the sample, which corresponds to the tokens . and </s>
         self.src = src
         self.src_lengths = src_lengths
         # unsequeeze returns a new tensor with a dimension of size one inserted at the specified position
@@ -386,10 +385,13 @@ def greedy_decode(model, src, src_mask, src_lengths, max_len=100, sos_index=1, e
 
     with torch.no_grad():
         encoder_hidden, encoder_final = model.encode(src, src_mask, src_lengths)
+        # initialize y0 to sos
         prev_y = torch.ones(1, 1).fill_(sos_index).type_as(src)
         trg_mask = torch.ones_like(prev_y)
 
+    # list of predicted words
     output = []
+    # list to store the attention energies alphai
     attention_scores = []
     hidden = None
 
@@ -401,8 +403,11 @@ def greedy_decode(model, src, src_mask, src_lengths, max_len=100, sos_index=1, e
 
             # we predict from the pre-output layer, which is
             # a combination of Decoder state, prev emb, and context
+            # pre_output needs to be passed to the generator which applies the mlp to project the vector to the target
+            # space, then , applies a softmax
             prob = model.generator(pre_output[:, -1])
 
+        # torch.max returns the index, argmax and for our case we need only the argmax which is the index of the word with max prob
         _, next_word = torch.max(prob, dim=1)
         next_word = next_word.data.item()
         output.append(next_word)
@@ -438,6 +443,7 @@ def print_examples(example_iter, model, n=2, max_len=100,
     count = 0
     print()
 
+    # this is just to assign the source eos token 2, target sos 2 and eos 3
     if src_vocab is not None and trg_vocab is not None:
         src_eos_index = src_vocab.stoi[EOS_TOKEN]
         trg_sos_index = trg_vocab.stoi[SOS_TOKEN]
@@ -532,5 +538,6 @@ model = make_model(len(SRC.vocab), len(TRG.vocab),
                    emb_size=256, hidden_size=256,
                    num_layers=1, dropout=0.2)
 dev_perplexities = train(model, print_every=100)
+
 
 
