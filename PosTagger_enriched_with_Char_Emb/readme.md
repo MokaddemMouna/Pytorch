@@ -11,9 +11,9 @@ Reminder of the task:
 
 There are two main points I spent time thinking about to solve this task. Here are they:
 
-1. Are we going to train the character embedding LSTM in a supervised fashion so to get the character embedding representation?
+1. Are we going to train the character embedding LSTM in a unsupervised fashion so to get the character embedding representation?
 Something similar to the CBOW model? So, we will take context characters and try to predict the other characters. I didn't find
-that this is a good idea because the length of words is not always the same, so if we fix the number of characters, we try to learn
+that this is a good idea because the length of words is not always the same, so if we fix the number of characters we try to learn
 will they be the middle ones, is 1 or 2 or 3 characters are enough? And so many questions. 
 <br/><br/>The second idea is to learn character embedding while we perform the pos tagging task like for the word embeddings. So here the 
 character embedding lSTM will input a word (a character for each time step) and then the last hidden layer will be the character
