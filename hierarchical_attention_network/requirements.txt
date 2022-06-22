@@ -2,6 +2,6 @@ cymem==2.0.3
 Flask==1.1.1
 gensim==3.8.2
 nltk==3.4.5
-numpy==1.18.1
+numpy==1.22.0
 pandas==1.0.1
 torch==1.4.0
