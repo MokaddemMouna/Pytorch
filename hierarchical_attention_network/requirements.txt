@@ -1,5 +1,5 @@
 cymem==2.0.3
-Flask==1.1.1
+Flask==2.3.2
 gensim==3.8.2
 nltk==3.4.5
 numpy==1.18.1
